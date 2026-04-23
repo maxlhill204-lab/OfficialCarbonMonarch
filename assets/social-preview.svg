@@ -1,0 +1,24 @@
+﻿<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#090d14"/>
+      <stop offset="100%" stop-color="#151b22"/>
+    </linearGradient>
+    <linearGradient id="fg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#edf2f8"/>
+      <stop offset="100%" stop-color="#a3afbe"/>
+    </linearGradient>
+  </defs>
+  <rect width="1200" height="630" fill="url(#bg)"/>
+  <g opacity="0.2">
+    <path d="M0 130h1200M0 230h1200M0 330h1200M0 430h1200M0 530h1200" stroke="#c6ceda"/>
+    <path d="M120 0v630M320 0v630M520 0v630M720 0v630M920 0v630M1120 0v630" stroke="#c6ceda"/>
+  </g>
+  <text x="90" y="225" fill="#c6ceda" font-size="28" font-family="Inter, Arial, sans-serif" letter-spacing="10">MONARCHCARBON</text>
+  <text x="90" y="340" fill="url(#fg)" font-size="84" font-family="Inter, Arial, sans-serif" font-weight="700">Engineered in Carbon</text>
+  <text x="90" y="410" fill="#9aa4b5" font-size="30" font-family="Inter, Arial, sans-serif">Luxury carbon fiber phone cases inspired by precision performance design.</text>
+  <rect x="860" y="115" width="210" height="400" rx="44" fill="#11161e" stroke="#dce4ef" opacity="0.95"/>
+  <rect x="895" y="155" width="140" height="315" rx="32" fill="#1b222c"/>
+  <circle cx="935" cy="195" r="20" fill="#9aa4b5" opacity="0.35"/>
+  <circle cx="990" cy="235" r="13" fill="#9aa4b5" opacity="0.25"/>
+</svg>
