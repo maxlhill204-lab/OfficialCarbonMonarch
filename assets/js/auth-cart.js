@@ -2,13 +2,13 @@
   const guestCartKey = 'monarchcarbon_guest_cart_v1';
   const body = document.body;
   const products = window.MONARCH_PRODUCTS || [];
-  const config = window.MONARCH_CONFIG || {};
   let firebaseReady = false;
   let auth = null;
   let db = null;
   let googleProvider = null;
   let currentUser = null;
   let cartItems = [];
+  let isCheckingOut = false;
 
   function initFirebase() {
     const app = window.MONARCH_FIREBASE;
@@ -70,11 +70,7 @@
   }
 
   async function loadCart() {
-    if (currentUser && firebaseReady) {
-      cartItems = await loadUserCart(currentUser.uid);
-    } else {
-      cartItems = getGuestCart();
-    }
+    cartItems = currentUser && firebaseReady ? await loadUserCart(currentUser.uid) : getGuestCart();
     renderCartEverywhere();
   }
 
@@ -98,9 +94,7 @@
     const item = next[index];
     if (!item) return;
     item.quantity += delta;
-    if (item.quantity <= 0) {
-      next.splice(index, 1);
-    }
+    if (item.quantity <= 0) next.splice(index, 1);
     cartItems = next;
     await persistCart();
   }
@@ -155,7 +149,7 @@
           <label>Password</label>
           <input id="auth-password" type="password" required placeholder="Minimum 6 characters" />
           <div class="auth-actions-row">
-            <button class="button button-primary" type="submit" data-auth-mode="signin">Sign In</button>
+            <button class="button button-primary" type="submit">Sign In</button>
             <button class="button button-secondary" type="button" id="signup-button">Create Account</button>
           </div>
         </form>
@@ -191,7 +185,7 @@
   function authMessage(message, error) {
     const target = document.getElementById('auth-message');
     if (!target) return;
-    target.textContent = message || '';
+    target.innerHTML = message || '';
     target.className = `auth-message ${error ? 'is-error' : 'is-ok'}`;
   }
 
@@ -218,7 +212,6 @@
     const password = document.getElementById('auth-password').value;
     try {
       await auth.signInWithEmailAndPassword(email, password);
-      authMessage('Signed in.', false);
       closeAuthModal();
     } catch (error) {
       authMessage(error.message, true);
@@ -231,7 +224,6 @@
     const password = document.getElementById('auth-password').value;
     try {
       await auth.createUserWithEmailAndPassword(email, password);
-      authMessage('Account created.', false);
       closeAuthModal();
     } catch (error) {
       authMessage(error.message, true);
@@ -268,37 +260,54 @@
   }
 
   function openAccountMenu() {
-    const panel = document.getElementById('auth-message');
-    if (!panel) return;
-    panel.innerHTML = currentUser ? `Signed in as ${currentUser.email}. <button id="logout-button" class="text-link inline-link" type="button">Log out</button>` : '';
+    authMessage(currentUser ? `Signed in as ${currentUser.email}. <button id="logout-button" class="text-link inline-link" type="button">Log out</button>` : '', false);
     document.getElementById('logout-button')?.addEventListener('click', handleLogout, { once: true });
     openAuthModal();
   }
 
-  function checkoutLinkForType(type) {
-    return (config.stripeLinks && config.stripeLinks[type]) || '';
+  async function startCheckout(itemsOverride) {
+    if (isCheckingOut) return;
+    const items = itemsOverride || cartItems;
+    if (!items.length) return;
+    isCheckingOut = true;
+    setCheckoutBusy(true);
+    try {
+      const response = await fetch('/api/create-checkout-session', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ items })
+      });
+      const data = await response.json();
+      if (!response.ok || !data.url) {
+        throw new Error(data.error || 'Unable to start Stripe checkout.');
+      }
+      window.location.href = data.url;
+    } catch (error) {
+      renderCheckoutStatus(error.message || 'Unable to start checkout.', true);
+    } finally {
+      isCheckingOut = false;
+      setCheckoutBusy(false);
+    }
   }
 
-  function checkoutSummaryMarkup(fullPage) {
-    const types = [...new Set(cartItems.map((item) => item.type))];
-    if (!types.length) return '';
+  function setCheckoutBusy(isBusy) {
+    document.querySelectorAll('[data-checkout-all],[data-checkout-item]').forEach((el) => {
+      if (el.tagName === 'BUTTON') el.disabled = isBusy;
+      if (isBusy) {
+        el.dataset.originalLabel = el.dataset.originalLabel || el.textContent;
+        el.textContent = 'Loading…';
+      } else if (el.dataset.originalLabel) {
+        el.textContent = el.dataset.originalLabel;
+      }
+    });
+  }
 
-    if (types.length === 1) {
-      const link = checkoutLinkForType(types[0]);
-      return link ? `<a class="button button-primary" href="${link}" target="_blank" rel="noopener noreferrer">Checkout Cart</a>` : '';
-    }
-
-    const grouped = types.map((type) => {
-      const link = checkoutLinkForType(type);
-      if (!link) return '';
-      const label = type.replace(/-/g, ' ').replace(/\b\w/g, (m) => m.toUpperCase());
-      return `<a class="button button-primary" href="${link}" target="_blank" rel="noopener noreferrer">Checkout ${label}</a>`;
-    }).join('');
-
-    return `
-      <p class="price-note">Your cart has multiple product types. With the current Stripe Payment Link setup, each type checks out separately.</p>
-      <div class="cart-summary-actions">${grouped}</div>
-    `;
+  function renderCheckoutStatus(message, error) {
+    const targets = document.querySelectorAll('[data-checkout-status]');
+    targets.forEach((target) => {
+      target.textContent = message || '';
+      target.className = `auth-message ${error ? 'is-error' : 'is-ok'}`;
+    });
   }
 
   function renderCartEverywhere() {
@@ -313,6 +322,7 @@
     if (cartPage) cartPage.innerHTML = cartMarkup(true);
 
     bindCartControls();
+    applyCartStatusFromUrl();
   }
 
   function cartMarkup(fullPage) {
@@ -325,38 +335,35 @@
       `;
     }
 
-    const rows = cartItems.map((item, index) => {
-      const checkoutLink = checkoutLinkForType(item.type);
-      return `
-        <article class="cart-item">
-          <div>
-            <h3>${item.name}</h3>
-            <p>${item.model || 'One size'} · ${item.priceLabel}</p>
-            <p class="cart-item-note">Current checkout is via Stripe Payment Links, so cart quantity/model won't pass into Stripe automatically yet.</p>
+    const rows = cartItems.map((item, index) => `
+      <article class="cart-item">
+        <div>
+          <h3>${item.name}</h3>
+          <p>${item.model || 'One size'} · ${item.priceLabel}</p>
+        </div>
+        <div class="cart-item-controls">
+          <div class="qty-row">
+            <button type="button" data-cart-dec="${index}">−</button>
+            <span>${item.quantity}</span>
+            <button type="button" data-cart-inc="${index}">+</button>
           </div>
-          <div class="cart-item-controls">
-            <div class="qty-row">
-              <button type="button" data-cart-dec="${index}">−</button>
-              <span>${item.quantity}</span>
-              <button type="button" data-cart-inc="${index}">+</button>
-            </div>
-            <strong>${currency((item.unitAmount || 0) * (item.quantity || 1))}</strong>
-            <div class="cart-item-action-buttons">
-              ${checkoutLink ? `<a class="button button-primary small-button" href="${checkoutLink}" target="_blank" rel="noopener noreferrer">Checkout</a>` : ''}
-              <button type="button" class="text-link remove-link" data-cart-remove="${index}">Remove</button>
-            </div>
+          <strong>${currency((item.unitAmount || 0) * (item.quantity || 1))}</strong>
+          <div class="cart-item-action-buttons">
+            <button type="button" class="button button-primary small-button" data-checkout-item="${index}">Buy This</button>
+            <button type="button" class="text-link remove-link" data-cart-remove="${index}">Remove</button>
           </div>
-        </article>
-      `;
-    }).join('');
+        </div>
+      </article>
+    `).join('');
 
     return `
       <div class="cart-items-wrap">${rows}</div>
       <div class="cart-summary-box">
         <div class="cart-summary-row"><span>Subtotal</span><strong>${currency(subtotal(cartItems))}</strong></div>
-        <p class="price-note">Shipping and tax are not included here yet.</p>
-        ${checkoutSummaryMarkup(fullPage)}
+        <p class="price-note">Secure Stripe checkout. All cart items can now be paid in one session.</p>
+        <div data-checkout-status class="auth-message"></div>
         <div class="cart-summary-actions">
+          <button type="button" class="button button-primary" data-checkout-all>Checkout Everything</button>
           ${fullPage ? '' : '<a class="button button-secondary" href="cart.html">Open Cart Page</a>'}
           <a class="button button-secondary" href="shop.html">Continue Shopping</a>
         </div>
@@ -368,6 +375,12 @@
     document.querySelectorAll('[data-cart-inc]').forEach((button) => button.onclick = () => updateQty(Number(button.dataset.cartInc), 1));
     document.querySelectorAll('[data-cart-dec]').forEach((button) => button.onclick = () => updateQty(Number(button.dataset.cartDec), -1));
     document.querySelectorAll('[data-cart-remove]').forEach((button) => button.onclick = () => removeItem(Number(button.dataset.cartRemove)));
+    document.querySelectorAll('[data-checkout-all]').forEach((button) => button.onclick = () => startCheckout());
+    document.querySelectorAll('[data-checkout-item]').forEach((button) => button.onclick = () => {
+      const index = Number(button.dataset.checkoutItem);
+      const item = cartItems[index];
+      if (item) startCheckout([item]);
+    });
   }
 
   function buildCurrentProductItem() {
@@ -391,18 +404,43 @@
   function enhanceProductPage() {
     if (body.dataset.page !== 'product') return;
     const actions = document.querySelector('.product-actions');
-    if (!actions || document.getElementById('add-to-cart-button')) return;
-    const button = document.createElement('button');
-    button.id = 'add-to-cart-button';
-    button.className = 'button button-secondary';
-    button.type = 'button';
-    button.textContent = 'Add to Cart';
-    button.addEventListener('click', async () => {
-      const item = buildCurrentProductItem();
-      if (!item) return;
-      await addToCart(item);
-    });
-    actions.prepend(button);
+    if (!actions) return;
+
+    if (!document.getElementById('add-to-cart-button')) {
+      const addButton = document.createElement('button');
+      addButton.id = 'add-to-cart-button';
+      addButton.className = 'button button-secondary';
+      addButton.type = 'button';
+      addButton.textContent = 'Add to Cart';
+      addButton.addEventListener('click', async () => {
+        const item = buildCurrentProductItem();
+        if (!item) return;
+        await addToCart(item);
+      });
+      actions.prepend(addButton);
+    }
+
+    const buyNow = actions.querySelector('.button-primary');
+    if (buyNow) {
+      buyNow.setAttribute('href', '#');
+      buyNow.textContent = 'Buy Now';
+      buyNow.onclick = async (event) => {
+        event.preventDefault();
+        const item = buildCurrentProductItem();
+        if (!item) return;
+        await startCheckout([item]);
+      };
+    }
+  }
+
+  function applyCartStatusFromUrl() {
+    if (body.dataset.page !== 'cart') return;
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('checkout') === 'success') {
+      renderCheckoutStatus('Payment completed. Check Stripe for the new order.', false);
+    } else if (params.get('checkout') === 'cancelled') {
+      renderCheckoutStatus('Checkout cancelled. Your cart is still here.', true);
+    }
   }
 
   async function handleAuthState(user) {
@@ -436,3 +474,5 @@
   document.addEventListener('DOMContentLoaded', init);
   window.addEventListener('load', enhanceProductPage);
 })();
+
+
